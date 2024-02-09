@@ -1,7 +1,5 @@
 use anyhow::{bail, Result};
-use dotenvy::dotenv;
 use serde::Deserialize;
-use std::env;
 use std::path::Path;
 use std::{collections::HashMap, fs};
 use transmission_rpc::types::TorrentAddArgs;
@@ -12,9 +10,16 @@ pub struct Entry {
     torrents: Option<Vec<String>>,
     children: Option<Directory>,
 }
-
 #[derive(Debug, Deserialize)]
 pub struct Directory(HashMap<String, Entry>);
+
+#[derive(Debug, Deserialize)]
+pub struct Config {
+    url: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+    root: Directory,
+}
 
 impl Directory {
     fn write_traversal_to_vec(&self, download_dir: &Path, list: &mut Vec<(String, String)>) {
@@ -41,13 +46,14 @@ impl Directory {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    dotenv().ok();
     simple_logger::init_with_level(log::Level::Info)?;
-    let url = env::var("URL")
+    let config: Config = serde_yaml::from_str(&fs::read_to_string("config.yml")?)?;
+    let url = config
+        .url
         .unwrap_or("http://localhost:9091/transmission/rpc".to_string())
         .parse()?;
-    let mut client = match (env::var("USER"), env::var("PASSWORD")) {
-        (Ok(user), Ok(password)) => TransClient::with_auth(url, BasicAuth { user, password }),
+    let mut client = match (config.username, config.password) {
+        (Some(user), Some(password)) => TransClient::with_auth(url, BasicAuth { user, password }),
         _ => TransClient::new(url),
     };
 
@@ -56,8 +62,7 @@ async fn main() -> Result<()> {
     };
 
     let download_dir = Path::new(&response.arguments.download_dir);
-    let config: Directory = serde_yaml::from_str(&fs::read_to_string("config.yml")?)?;
-    for (filename, download_dir) in config.traverse(download_dir) {
+    for (filename, download_dir) in config.root.traverse(download_dir) {
         match client
             .torrent_add(TorrentAddArgs {
                 filename: Some(filename.clone()),
