@@ -8,14 +8,8 @@ use transmission_rpc::types::TorrentAddArgs;
 use transmission_rpc::{types::BasicAuth, TransClient};
 
 #[derive(Debug, Deserialize)]
-pub struct Torrent {
-    url: String,
-    find: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct Entry {
-    torrents: Option<Vec<Torrent>>,
+    torrents: Option<Vec<String>>,
     children: Option<Directory>,
 }
 
@@ -29,10 +23,7 @@ impl Directory {
             download_dir.push(directory);
             if let Some(torrents) = &entry.torrents {
                 for torrent in torrents {
-                    list.push((
-                        torrent.url.clone(),
-                        download_dir.to_string_lossy().to_string(),
-                    ));
+                    list.push((torrent.clone(), download_dir.to_string_lossy().to_string()));
                 }
             }
             if let Some(children) = &entry.children {
@@ -52,12 +43,12 @@ impl Directory {
 async fn main() -> Result<()> {
     dotenv().ok();
     simple_logger::init_with_level(log::Level::Info)?;
-    let url = env::var("URL").unwrap_or("http://localhost:9091/transmission/rpc".to_string());
-    let mut client = if let (Ok(user), Ok(password)) = (env::var("USER"), env::var("PASSWORD")) {
-        let basic_auth = BasicAuth { user, password };
-        TransClient::with_auth(url.parse()?, basic_auth)
-    } else {
-        TransClient::new(url.parse()?)
+    let url = env::var("URL")
+        .unwrap_or("http://localhost:9091/transmission/rpc".to_string())
+        .parse()?;
+    let mut client = match (env::var("USER"), env::var("PASSWORD")) {
+        (Ok(user), Ok(password)) => TransClient::with_auth(url, BasicAuth { user, password }),
+        _ => TransClient::new(url),
     };
 
     let Ok(response) = client.session_get().await else {

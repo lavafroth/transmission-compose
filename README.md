@@ -14,5 +14,3 @@ PASSWORD="yoursuperstrongpasswordbruh"
 This file can be left empty if no RPC password is set.
 
 Now execute `cargo run`.
-
-⚠️ NOTE: The `--find` functionality for seeding already downloaded torrents is not implemented yet.
