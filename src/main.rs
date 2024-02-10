@@ -1,27 +1,50 @@
 use anyhow::{bail, Result};
 use futures::{stream, StreamExt};
-use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Client, StatusCode};
+use reqwest::{
+    header::{HeaderMap, HeaderValue},
+    Client, RequestBuilder, StatusCode,
+};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use std::{collections::HashMap, fs};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
 use url::Url;
 
 #[derive(Debug, Deserialize)]
 pub struct Entry {
     torrents: Option<Vec<String>>,
-    children: Option<Directory>,
+    children: Option<Subdirectories>,
 }
 #[derive(Debug, Deserialize)]
-pub struct Directory(HashMap<String, Entry>);
+pub struct Subdirectories(BTreeMap<String, Entry>);
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Authentication {
+    username: Option<String>,
+    password: Option<String>,
+}
+
+impl Authentication {
+    fn apply(&self, rb: RequestBuilder) -> RequestBuilder {
+        match self {
+            Authentication {
+                username: Some(username),
+                password: Some(password),
+            } => rb.basic_auth(username, Some(password)),
+            _ => rb,
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
     url: Option<String>,
-    username: Option<String>,
-    password: Option<String>,
+    #[serde(flatten)]
+    auth: Authentication,
     concurrency: Option<usize>,
-    root: Directory,
+    root: Subdirectories,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -31,7 +54,7 @@ pub struct Torrent {
     download_dir: String,
 }
 
-impl Directory {
+impl Subdirectories {
     fn write_traversal_to_vec(&self, download_dir: &Path, list: &mut Vec<Torrent>) {
         for (directory, entry) in self.0.iter() {
             let mut download_dir = download_dir.to_path_buf();
@@ -57,26 +80,14 @@ impl Directory {
     }
 }
 
-async fn get_csrf_token(
-    url: Url,
-    username: Option<String>,
-    password: Option<String>,
-) -> Result<Option<HeaderValue>> {
-    let requestbuilder = reqwest::Client::new().get(url);
-    let resp = if let Some(username) = username {
-        requestbuilder.basic_auth(username, password)
-    } else {
-        requestbuilder
-    }
-    .send()
-    .await?;
-    if let (StatusCode::CONFLICT, Some(id)) = (
+async fn get_csrf_token(url: Url, auth: Authentication) -> Result<Option<HeaderValue>> {
+    let resp = auth.apply(reqwest::Client::new().get(url)).send().await?;
+    match (
         resp.status(),
         resp.headers().get("X-Transmission-Session-Id"),
     ) {
-        Ok(Some(id.to_owned()))
-    } else {
-        Ok(None)
+        (StatusCode::CONFLICT, Some(id)) => Ok(Some(id.to_owned())),
+        _ => Ok(None),
     }
 }
 
@@ -105,25 +116,20 @@ pub struct TorrentAddResponse {
 pub async fn add_torrent(
     client: &Client,
     url: Url,
-    username: Option<String>,
-    password: Option<String>,
+    auth: Authentication,
     torrent: Torrent,
 ) -> Result<()> {
-    let requestbuilder = client.post(url).json(&TorrentAddRequest {
-        method: "torrent-add",
-        arguments: torrent.clone(),
-    });
-
-    let torrent_add_response: TorrentAddResponse = match username {
-        Some(username) => requestbuilder.basic_auth(username, password),
-        None => requestbuilder,
-    }
-    .send()
-    .await?
-    .json()
-    .await?;
-    if torrent_add_response.result != "success" {
-        bail!(r#"RPC responded without result "success""#);
+    let response: TorrentAddResponse = auth
+        .apply(client.post(url).json(&TorrentAddRequest {
+            method: "torrent-add",
+            arguments: torrent.clone(),
+        }))
+        .send()
+        .await?
+        .json()
+        .await?;
+    if response.result != "success" {
+        bail!("RPC responded with result: {}", response.result);
     }
     Ok(())
 }
@@ -132,16 +138,12 @@ pub async fn add_torrent(
 async fn main() -> Result<()> {
     simple_logger::init_with_level(log::Level::Info)?;
     let config: Config = serde_yaml::from_str(&fs::read_to_string("config.yml")?)?;
-    let username = config.username;
-    let password = config.password;
     let url: Url = config
         .url
         .unwrap_or("http://localhost:9091/transmission/rpc".to_string())
         .parse()?;
     let cbuilder = reqwest::Client::builder();
-    let client = if let Some(token) =
-        get_csrf_token(url.clone(), username.clone(), password.clone()).await?
-    {
+    let client = if let Some(token) = get_csrf_token(url.clone(), config.auth.clone()).await? {
         let mut headers = HeaderMap::new();
         log::debug!(
             "daemon has set X-Transmission-Session-Id header to {}",
@@ -154,32 +156,20 @@ async fn main() -> Result<()> {
     }
     .build()?;
 
-    let requestbuilder = client.post(url.clone());
-    let resp: Session = match username.clone() {
-        Some(username) => requestbuilder.basic_auth(username, password.clone()),
-        None => requestbuilder,
-    }
-    .body(r#"{"method":"session-get"}"#)
-    .send()
-    .await?
-    .json()
-    .await?;
+    let session: Session = config
+        .auth
+        .apply(client.post(url.clone()).body(r#"{"method":"session-get"}"#))
+        .send()
+        .await?
+        .json()
+        .await?;
 
     let client = &client;
     let url = &url;
-    let username = &username;
-    let password = &password;
-    stream::iter(config.root.traverse(&resp.arguments.download_dir))
+    let auth = &config.auth;
+    stream::iter(config.root.traverse(&session.arguments.download_dir))
         .map(|torrent| async move {
-            match add_torrent(
-                client,
-                url.clone(),
-                username.clone(),
-                password.clone(),
-                torrent.clone(),
-            )
-            .await
-            {
+            match add_torrent(client, url.clone(), auth.clone(), torrent.clone()).await {
                 Ok(_) => log::info!(
                     "added torrent {} to {}",
                     torrent.filename,
