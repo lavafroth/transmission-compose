@@ -5,11 +5,19 @@ transmission RPC. Think docker-compose but arrr.
 
 ## Installation
 
+### Binaries
+
+Download the binary for your system from the [releases](https://github.com/lavafroth/transmission-compose/releases).
+
+### From source
+
 Install Rust (preferably using rustup) and run the following:
 
 ```sh
 cargo install --git https://github.com/lavafroth/transmission-compose
 ```
+
+You will now be able to execute `transmission-daemon` from the commandline.
 
 ## Usage
 
@@ -27,9 +35,4 @@ The config entries for each directory can have the following two fields:
 
 The example config file uses no credentials (commented out) and starts downloading the Archlinux and NixOS ISO torrents.
 
-After making sure that the transmission-daemon is running, execute the following
-to run transmission-compose.
-
-```sh
-cargo run
-```
+After making sure that the transmission-daemon is running, run `transmission-compose` inside the directory which contains the `config.yml` file.
