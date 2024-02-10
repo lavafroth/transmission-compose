@@ -1,6 +1,7 @@
 # url: "http://localhost:9091/transmission/rpc"
 # username: "transmission"
 # password: "superstrongpasswordbro"
+# concurrency: 4
 
 root:
   oses:
