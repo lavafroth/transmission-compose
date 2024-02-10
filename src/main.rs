@@ -183,7 +183,7 @@ async fn main() -> Result<()> {
                 ),
             };
         })
-        .buffer_unordered(config.concurrency.unwrap_or(4))
+        .buffer_unordered(config.concurrency.filter(|&c| c != 0).unwrap_or(4))
         .collect::<Vec<()>>()
         .await;
 
