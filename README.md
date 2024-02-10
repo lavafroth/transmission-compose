@@ -13,13 +13,13 @@ cargo install --git https://github.com/lavafroth/transmission-compose
 
 ## Usage
 
-Place your config in the `config.yaml`file. Credentials can be specified in the
-config file using the `username` and `password` fields. They can also be left
-unspecified in case the RPC does not require authentication. The `root` field
-specifies the directory structure of the torrents to be downloaded. This root is
-implicitly set to the download directory for the current transmission session.
-Make sure to have the daemon running in the proper directory before running
-`transmission-compose`.
+Place your config in the `config.yaml` file. RPC credentials can be optionally
+specified in the config file using the `username` and `password` fields. For
+adding torrents faster, the `concurrency` field can be set to a number larger
+than the default of 4. The `root` field specifies the directory structure of the
+torrents to be downloaded. This root is implicitly set to the download directory
+for the current transmission session. Make sure to have the daemon running in
+the proper directory before running `transmission-compose`.
 
 The config entries for each directory can have the following two fields:
 - `torrents`: a list of URLs, paths or magnet links that will be downloaded to the directory
