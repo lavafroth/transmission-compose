@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use base64::prelude::*;
 use futures::{stream, StreamExt};
 use reqwest::{
     header::{HeaderMap, HeaderValue},
@@ -49,6 +50,20 @@ pub struct Config {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "kebab-case")]
+#[serde(untagged)]
+pub enum TorrentAdd {
+    File {
+        filename: String,
+        download_dir: String,
+    },
+    Metainfo {
+        metainfo: String,
+        download_dir: String,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "kebab-case")]
 pub struct Torrent {
     filename: String,
     download_dir: String,
@@ -94,7 +109,7 @@ async fn get_csrf_token(url: Url, auth: Authentication) -> Result<Option<HeaderV
 #[derive(Serialize, Debug)]
 pub struct TorrentAddRequest {
     method: &'static str,
-    arguments: Torrent,
+    arguments: TorrentAdd,
 }
 
 #[derive(Deserialize, Debug)]
@@ -119,10 +134,28 @@ pub async fn add_torrent(
     auth: Authentication,
     torrent: Torrent,
 ) -> Result<()> {
+    let arguments = match Url::parse(&torrent.filename) {
+        // technically a url, not a filepath
+        Ok(_) => TorrentAdd::File {
+            filename: torrent.filename,
+            download_dir: torrent.download_dir,
+        },
+        Err(_) => match fs::read(&torrent.filename) {
+            Ok(s) => TorrentAdd::Metainfo {
+                metainfo: BASE64_STANDARD.encode(s),
+                download_dir: torrent.download_dir,
+            },
+            // the real case where we pass a filepath
+            Err(_) => TorrentAdd::File {
+                filename: torrent.filename,
+                download_dir: torrent.download_dir,
+            },
+        },
+    };
     let response: TorrentAddResponse = auth
         .apply(client.post(url).json(&TorrentAddRequest {
             method: "torrent-add",
-            arguments: torrent.clone(),
+            arguments,
         }))
         .send()
         .await?
