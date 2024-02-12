@@ -36,3 +36,12 @@ The config entries for each directory can have the following two fields:
 The example config file uses no credentials (commented out) and starts downloading the Archlinux and NixOS ISO torrents.
 
 After making sure that the transmission-daemon is running, run `transmission-compose` inside the directory which contains the `config.yml` file.
+
+### Link / file priority
+
+If the torrent specified is a magnet link, it is passed straight to the RPC.
+However, if it is a file path, transmission-compose will try to read the file if
+it exists locally and send the contents (metainfo) to the RPC.
+
+If reading the file fails due to lack of permission or the file not existing,
+the RPC receives the file path and has to deal with it.
