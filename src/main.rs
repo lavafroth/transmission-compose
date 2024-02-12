@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use base64::prelude::*;
 use futures::{stream, StreamExt};
 use reqwest::{
@@ -170,7 +170,9 @@ pub async fn add_torrent(
 #[tokio::main]
 async fn main() -> Result<()> {
     simple_logger::init_with_level(log::Level::Info)?;
-    let config: Config = serde_yaml::from_str(&fs::read_to_string("config.yml")?)?;
+    let config: Config = serde_yaml::from_str(
+        &fs::read_to_string("config.yml").context("Failed to read config file `config.yml`")?,
+    )?;
     let url: Url = config
         .url
         .unwrap_or("http://localhost:9091/transmission/rpc".to_string())
