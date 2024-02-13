@@ -45,7 +45,7 @@ pub struct Config {
     #[serde(flatten)]
     auth: Authentication,
     concurrency: Option<usize>,
-    root: Subdirectories,
+    root: Entry,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -202,25 +202,27 @@ async fn main() -> Result<()> {
     let client = &client;
     let url = &url;
     let auth = &config.auth;
-    stream::iter(config.root.traverse(&session.arguments.download_dir))
-        .map(|torrent| async move {
-            match add_torrent(client, url.clone(), auth.clone(), torrent.clone()).await {
-                Ok(_) => log::info!(
-                    "added torrent {} to {}",
-                    torrent.filename,
-                    torrent.download_dir
-                ),
-                Err(error) => log::error!(
-                    "failed to add torrent {} to {}: {}",
-                    torrent.filename,
-                    torrent.download_dir,
-                    error
-                ),
-            };
-        })
-        .buffer_unordered(config.concurrency.filter(|&c| c != 0).unwrap_or(4))
-        .collect::<Vec<()>>()
-        .await;
+    if let Some(childre) = config.root.children {
+        stream::iter(childre.traverse(&session.arguments.download_dir))
+            .map(|torrent| async move {
+                match add_torrent(client, url.clone(), auth.clone(), torrent.clone()).await {
+                    Ok(_) => log::info!(
+                        "added torrent {} to {}",
+                        torrent.filename,
+                        torrent.download_dir
+                    ),
+                    Err(error) => log::error!(
+                        "failed to add torrent {} to {}: {}",
+                        torrent.filename,
+                        torrent.download_dir,
+                        error
+                    ),
+                };
+            })
+            .buffer_unordered(config.concurrency.filter(|&c| c != 0).unwrap_or(4))
+            .collect::<Vec<()>>()
+            .await;
+    }
 
     Ok(())
 }
