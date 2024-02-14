@@ -4,11 +4,12 @@
 # concurrency: 4
 
 root:
-  oses:
-    children:
-      archlinux:
-        torrents:
-          - "magnet:?xt=urn:btih:a9cd8c3b9dcad4785db47908ad63d43694432cae&dn=archlinux-2024.02.01-x86_64.iso"
-      nixos:
-        torrents:
-          - "https://github.com/AnimMouse/NixOS-ISO-Torrents/releases/download/v23.11.3920.25e3d4c0d359/nixos-gnome-23.11.3920.25e3d4c0d359-x86_64-linux.iso.torrent"
+  children:
+    oses:
+      children:
+        archlinux:
+          torrents:
+            - "magnet:?xt=urn:btih:a9cd8c3b9dcad4785db47908ad63d43694432cae&dn=archlinux-2024.02.01-x86_64.iso"
+        nixos:
+          torrents:
+            - "https://github.com/AnimMouse/NixOS-ISO-Torrents/releases/download/v23.11.3920.25e3d4c0d359/nixos-gnome-23.11.3920.25e3d4c0d359-x86_64-linux.iso.torrent"

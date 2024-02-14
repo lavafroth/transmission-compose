@@ -5,17 +5,17 @@ use reqwest::{
     header::{HeaderMap, HeaderValue},
     Client, RequestBuilder, StatusCode,
 };
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::{Path, PathBuf},
-};
+use serde::Deserialize;
+use std::{collections::BTreeMap, fs, path::Path};
 use url::Url;
+
+pub mod session;
+pub mod torrent;
 
 #[derive(Debug, Deserialize)]
 pub struct Entry {
-    torrents: Option<Vec<String>>,
+    #[serde(default)]
+    torrents: Vec<String>,
     children: Option<Subdirectories>,
 }
 #[derive(Debug, Deserialize)]
@@ -48,47 +48,35 @@ pub struct Config {
     root: Entry,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(rename_all = "kebab-case")]
-#[serde(untagged)]
-pub enum TorrentAdd {
-    File {
-        filename: String,
-        download_dir: String,
-    },
-    Metainfo {
-        metainfo: String,
-        download_dir: String,
-    },
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(rename_all = "kebab-case")]
-pub struct Torrent {
+#[derive(Clone)]
+pub struct Schema {
     filename: String,
     download_dir: String,
 }
 
 impl Subdirectories {
-    fn write_traversal_to_vec(&self, download_dir: &Path, list: &mut Vec<Torrent>) {
-        for (directory, entry) in self.0.iter() {
+    fn write_traversal_to_vec(&self, download_dir: &Path, list: &mut Vec<Schema>) {
+        for (directory, entry) in &self.0 {
             let mut download_dir = download_dir.to_path_buf();
             download_dir.push(directory);
-            if let Some(torrents) = &entry.torrents {
-                for torrent in torrents {
-                    list.push(Torrent {
-                        filename: torrent.clone(),
-                        download_dir: download_dir.to_string_lossy().to_string(),
-                    });
-                }
-            }
-            if let Some(children) = &entry.children {
-                children.write_traversal_to_vec(&download_dir, list);
-            }
+
+            entry.write_traversal_to_vec(&download_dir, list);
+        }
+    }
+}
+
+impl Entry {
+    fn write_traversal_to_vec(&self, download_dir: &Path, list: &mut Vec<Schema>) {
+        list.extend(self.torrents.iter().map(|slug| Schema {
+            filename: slug.clone(),
+            download_dir: download_dir.to_string_lossy().to_string(),
+        }));
+        if let Some(children) = &self.children {
+            children.write_traversal_to_vec(download_dir, list);
         }
     }
 
-    fn traverse(&self, download_dir: &Path) -> Vec<Torrent> {
+    fn traverse(&self, download_dir: &Path) -> Vec<Schema> {
         let mut list = vec![];
         self.write_traversal_to_vec(download_dir, &mut list);
         list
@@ -106,56 +94,44 @@ async fn get_csrf_token(url: Url, auth: Authentication) -> Result<Option<HeaderV
     }
 }
 
-#[derive(Serialize, Debug)]
-pub struct TorrentAddRequest {
-    method: &'static str,
-    arguments: TorrentAdd,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct Session {
-    arguments: SessionArguments,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "kebab-case")]
-pub struct SessionArguments {
-    download_dir: PathBuf,
-}
-
 #[derive(Deserialize, Debug)]
 pub struct TorrentAddResponse {
     result: String,
+}
+
+impl From<Schema> for torrent::Torrent {
+    fn from(value: Schema) -> Self {
+        match Url::parse(&value.filename) {
+            // technically a url, not a filepath
+            Ok(_) => Self::File {
+                filename: value.filename,
+                download_dir: value.download_dir,
+            },
+            Err(_) => match fs::read(&value.filename) {
+                Ok(s) => Self::Metainfo {
+                    metainfo: BASE64_STANDARD.encode(s),
+                    download_dir: value.download_dir,
+                },
+                // the real case where we pass a filepath
+                Err(_) => Self::File {
+                    filename: value.filename,
+                    download_dir: value.download_dir,
+                },
+            },
+        }
+    }
 }
 
 pub async fn add_torrent(
     client: &Client,
     url: Url,
     auth: Authentication,
-    torrent: Torrent,
+    torrent: Schema,
 ) -> Result<()> {
-    let arguments = match Url::parse(&torrent.filename) {
-        // technically a url, not a filepath
-        Ok(_) => TorrentAdd::File {
-            filename: torrent.filename,
-            download_dir: torrent.download_dir,
-        },
-        Err(_) => match fs::read(&torrent.filename) {
-            Ok(s) => TorrentAdd::Metainfo {
-                metainfo: BASE64_STANDARD.encode(s),
-                download_dir: torrent.download_dir,
-            },
-            // the real case where we pass a filepath
-            Err(_) => TorrentAdd::File {
-                filename: torrent.filename,
-                download_dir: torrent.download_dir,
-            },
-        },
-    };
     let response: TorrentAddResponse = auth
-        .apply(client.post(url).json(&TorrentAddRequest {
+        .apply(client.post(url).json(&session::Request {
             method: "torrent-add",
-            arguments,
+            arguments: torrent.into(),
         }))
         .send()
         .await?
@@ -191,7 +167,7 @@ async fn main() -> Result<()> {
     }
     .build()?;
 
-    let session: Session = config
+    let session: session::Session = config
         .auth
         .apply(client.post(url.clone()).body(r#"{"method":"session-get"}"#))
         .send()
@@ -202,27 +178,25 @@ async fn main() -> Result<()> {
     let client = &client;
     let url = &url;
     let auth = &config.auth;
-    if let Some(childre) = config.root.children {
-        stream::iter(childre.traverse(&session.arguments.download_dir))
-            .map(|torrent| async move {
-                match add_torrent(client, url.clone(), auth.clone(), torrent.clone()).await {
-                    Ok(_) => log::info!(
-                        "added torrent {} to {}",
-                        torrent.filename,
-                        torrent.download_dir
-                    ),
-                    Err(error) => log::error!(
-                        "failed to add torrent {} to {}: {}",
-                        torrent.filename,
-                        torrent.download_dir,
-                        error
-                    ),
-                };
-            })
-            .buffer_unordered(config.concurrency.filter(|&c| c != 0).unwrap_or(4))
-            .collect::<Vec<()>>()
-            .await;
-    }
+    stream::iter(config.root.traverse(&session.arguments.download_dir))
+        .map(|torrent| async move {
+            match add_torrent(client, url.clone(), auth.clone(), torrent.clone()).await {
+                Ok(_) => log::info!(
+                    "added torrent {} to {}",
+                    torrent.filename,
+                    torrent.download_dir
+                ),
+                Err(error) => log::error!(
+                    "failed to add torrent {} to {}: {}",
+                    torrent.filename,
+                    torrent.download_dir,
+                    error
+                ),
+            };
+        })
+        .buffer_unordered(config.concurrency.filter(|&c| c != 0).unwrap_or(4))
+        .collect::<Vec<()>>()
+        .await;
 
     Ok(())
 }
