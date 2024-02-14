@@ -37,7 +37,7 @@ The example config file uses no credentials (commented out) and starts downloadi
 
 After making sure that the transmission-daemon is running, run `transmission-compose` inside the directory which contains the `config.yml` file.
 
-### Link / file priority
+### Torrent parsing nuance
 
 If the torrent specified is a magnet link, it is passed straight to the RPC.
 However, if it is a file path, transmission-compose will try to read the file if
