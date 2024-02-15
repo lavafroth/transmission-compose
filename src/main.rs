@@ -84,7 +84,7 @@ impl Entry {
     }
 }
 
-async fn get_csrf_token(url: Url, auth: Authentication) -> Result<Option<HeaderValue>> {
+async fn get_csrf_token(url: Url, auth: &Authentication) -> Result<Option<HeaderValue>> {
     let resp = auth.apply(reqwest::Client::new().get(url)).send().await?;
     match (
         resp.status(),
@@ -158,6 +158,22 @@ pub async fn add_torrent(
     Ok(())
 }
 
+async fn worker(client: &Client, url: &Url, auth: &Authentication, torrent: Schema) {
+    match add_torrent(client, url.clone(), auth.clone(), torrent.clone()).await {
+        Ok(_) => log::info!(
+            "added torrent {} to {}",
+            torrent.filename,
+            torrent.download_dir
+        ),
+        Err(error) => log::error!(
+            "failed to add torrent {} to {}: {}",
+            torrent.filename,
+            torrent.download_dir,
+            error
+        ),
+    };
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -175,7 +191,7 @@ async fn main() -> Result<()> {
         .unwrap_or("http://localhost:9091/transmission/rpc".to_string())
         .parse()?;
     let cbuilder = reqwest::Client::builder();
-    let client = match get_csrf_token(url.clone(), config.auth.clone()).await? {
+    let client = match get_csrf_token(url.clone(), &config.auth).await? {
         Some(token) => {
             let mut headers = HeaderMap::new();
             log::debug!("daemon has set session ID to {}", token.to_str()?);
@@ -194,25 +210,8 @@ async fn main() -> Result<()> {
         .json()
         .await?;
 
-    let client = &client;
-    let url = &url;
-    let auth = &config.auth;
     stream::iter(config.root.traverse(&session.arguments.download_dir))
-        .map(|torrent| async move {
-            match add_torrent(client, url.clone(), auth.clone(), torrent.clone()).await {
-                Ok(_) => log::info!(
-                    "added torrent {} to {}",
-                    torrent.filename,
-                    torrent.download_dir
-                ),
-                Err(error) => log::error!(
-                    "failed to add torrent {} to {}: {}",
-                    torrent.filename,
-                    torrent.download_dir,
-                    error
-                ),
-            };
-        })
+        .map(|torrent| worker(&client, &url, &config.auth, torrent))
         .buffer_unordered(config.concurrency.filter(|&c| c != 0).unwrap_or(4))
         .collect::<Vec<()>>()
         .await;
