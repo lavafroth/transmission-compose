@@ -6,7 +6,11 @@ use reqwest::{
     Client, RequestBuilder, StatusCode,
 };
 use serde::Deserialize;
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
 use url::Url;
 
 pub mod session;
@@ -57,10 +61,7 @@ pub struct Schema {
 impl Subdirectories {
     fn write_traversal_to_vec(&self, download_dir: &Path, list: &mut Vec<Schema>) {
         for (directory, entry) in &self.0 {
-            let mut download_dir = download_dir.to_path_buf();
-            download_dir.push(directory);
-
-            entry.write_traversal_to_vec(&download_dir, list);
+            entry.write_traversal_to_vec(download_dir.join(directory).as_ref(), list);
         }
     }
 }
@@ -122,6 +123,20 @@ impl From<Schema> for torrent::Torrent {
     }
 }
 
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    /// Path to a custom config file
+    #[arg(short, long, value_name = "FILE", default_value = "config.yml")]
+    config: PathBuf,
+
+    /// Enable verbose output for debugging
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
+}
+
 pub async fn add_torrent(
     client: &Client,
     url: Url,
@@ -145,25 +160,29 @@ pub async fn add_torrent(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    simple_logger::init_with_level(log::Level::Info)?;
+    let cli = Cli::parse();
+    let log_level = match cli.verbose {
+        0 => log::Level::Info,
+        1 => log::Level::Debug,
+        _ => log::Level::Trace,
+    };
+    simple_logger::init_with_level(log_level)?;
     let config: Config = serde_yaml::from_str(
-        &fs::read_to_string("config.yml").context("Failed to read config file `config.yml`")?,
+        &fs::read_to_string(cli.config).context("Failed to read config file `config.yml`")?,
     )?;
     let url: Url = config
         .url
         .unwrap_or("http://localhost:9091/transmission/rpc".to_string())
         .parse()?;
     let cbuilder = reqwest::Client::builder();
-    let client = if let Some(token) = get_csrf_token(url.clone(), config.auth.clone()).await? {
-        let mut headers = HeaderMap::new();
-        log::debug!(
-            "daemon has set X-Transmission-Session-Id header to {}",
-            token.to_str()?.to_string()
-        );
-        headers.insert("X-Transmission-Session-Id", token);
-        cbuilder.default_headers(headers)
-    } else {
-        cbuilder
+    let client = match get_csrf_token(url.clone(), config.auth.clone()).await? {
+        Some(token) => {
+            let mut headers = HeaderMap::new();
+            log::debug!("daemon has set session ID to {}", token.to_str()?);
+            headers.insert("X-Transmission-Session-Id", token);
+            cbuilder.default_headers(headers)
+        }
+        None => cbuilder,
     }
     .build()?;
 
